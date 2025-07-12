@@ -4,22 +4,37 @@ import pg from "pg";
 import test from "node:test";
 import { Pool } from 'pg';
 import lodash from 'lodash';
+import dotenv from "dotenv";
+dotenv.config();
+
+
 
 const app = express();
 const port = 5000;
 
-//configure db details
+// //configure db details
+// console.log("Password:", process.env.password);
+// console.log("user:", process.env.user);
 
 const db = new pg.Pool({
-    user: "neondb_owner",
-    host: "ep-curly-smoke-ab2hojsd-pooler.eu-west-2.aws.neon.tech",
-    database: "online_exam",
-    password: "npg_NfwWd9mjF1cZ",
+    user: process.env.user,
+    host: process.env.host,
+    database: process.env.database,
+    password: process.env.password,
     port: 5432,
     ssl: {
         rejectUnauthorized: false
-    }
-});
+    },
+    
+} );
+
+
+// const db = new Pool({
+//   connectionString: process.env.DATABASE_URL,
+//   ssl: false,
+// });
+
+
 db.connect();
 
 app.use(bodyParser.json());
@@ -136,6 +151,7 @@ app.post("/register", async (req, res) =>{
     };
 
 });
+
 
 app.post("/fetch_questions", async(req, res) =>{
     const {category} = req.body;
