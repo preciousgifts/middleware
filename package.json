@@ -1,0 +1,10 @@
+{
+  "type": "module",
+  "dependencies": {
+    "body-parser": "^2.2.0",
+    "express": "^5.1.0",
+    "lodash": "^4.17.21",
+    "pg": "^8.16.1",
+    "test": "^3.3.0"
+  }
+}
