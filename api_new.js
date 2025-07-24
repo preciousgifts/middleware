@@ -5,12 +5,27 @@ import test from "node:test";
 import { Pool } from 'pg';
 import lodash from 'lodash';
 import dotenv from "dotenv";
+import morgan from 'morgan';
+import fs from 'fs';
+import { dirname, join} from 'path';
+import { fileURLToPath } from 'url';
+import path from 'path'
+
+
+
 dotenv.config();
 
 
 
 const app = express();
 const port = 5000;
+
+// const Middleware = (req, res, next) =>{
+//     console.log('Middleware is running');
+//     next();
+// }
+
+// app.use(Middleware);
 
 // //configure db details
 // console.log("Password:", process.env.password);
@@ -202,8 +217,203 @@ app.post("/fetch_questions", async(req, res) =>{
 
 });
 
+//create a write stream
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-app.listen(port, ()=>{
-    console.log(`Server is running on port ${port}.`);
-})
+// Define logs directory path
+const logsDir = path.join(__dirname, 'logs');
 
+// Create logs directory if it doesn't exist
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+
+const accessLogStream = fs.createWriteStream(
+    path.join(logsDir, 'access.log'),
+    {flags: 'a'}
+
+);
+
+const errorLogStream = fs.createWriteStream(
+  path.join(logsDir, 'errors.log'),
+  { flags: 'a' }
+);
+
+// 4. Verify streams are writable
+accessLogStream.write('=== LOGGING STARTED ===\n');
+errorLogStream.write('=== ERROR LOGGING STARTED ===\n');
+
+
+// --- 2. Body Parsers (ESSENTIAL for logging request bodies) ---
+// These must come BEFORE your custom logging middleware if you want to log request bodies
+app.use(express.json());       // For parsing application/json
+app.use(express.urlencoded({ extended: true })); // For parsing application/x-www-form-urlencoded
+
+// --- 3. Custom Middleware for Request and Response Body Logging ---
+app.use((req, res, next) => {
+    // Capture Request Details
+    const requestLog = {
+        timestamp: new Date().toISOString(),
+        method: req.method,
+        url: req.originalUrl,
+        headers: req.headers,
+        body: req.body // This will contain the parsed request body
+    };
+
+    // Store original send/json functions
+    const originalSend = res.send;
+    const originalJson = res.json;
+
+    // Intercept res.send()
+    res.send = function (body) {
+        const responseLog = {
+            timestamp: new Date().toISOString(),
+            statusCode: res.statusCode,
+            headers: res.getHeaders(),
+            body: body ? JSON.parse(body) : null // Parse body if it's JSON string
+        };
+
+        // Log the complete transaction
+        const fullLogEntry = {
+            request: requestLog,
+            response: responseLog
+        };
+        // Write to a dedicated API log stream or the accessLogStream
+        accessLogStream.write(JSON.stringify(fullLogEntry) + '\n');
+
+        // Call the original send to actually send the response
+        originalSend.call(this, body);
+    };
+
+    // Intercept res.json()
+    res.json = function (body) {
+        const responseLog = {
+            timestamp: new Date().toISOString(),
+            statusCode: res.statusCode,
+            headers: res.getHeaders(),
+            body: body // This will contain the JSON object
+        };
+
+        // Log the complete transaction
+        const fullLogEntry = {
+            request: requestLog,
+            response: responseLog
+        };
+        // Write to a dedicated API log stream or the accessLogStream
+        accessLogStream.write(JSON.stringify(fullLogEntry) + '\n');
+
+        // Call the original json to actually send the response
+        originalJson.call(this, body);
+    };
+
+    // This console.log will confirm the middleware is hit
+    console.log('Custom logging middleware hit');
+
+    next(); // Pass control to the next middleware or route handler
+});
+
+
+// --- Example Routes (To test logging) ---
+app.get('/', (req, res) => {
+    res.send('Hello World!');
+});
+
+app.post('/api/data', (req, res) => {
+    console.log('Received data:', req.body); // Check if body is parsed here
+    res.json({ message: 'Data received', yourData: req.body });
+});
+
+app.get('/error-test', (req, res) => {
+    try {
+        throw new Error('This is a test error!');
+    } catch (err) {
+        errorLogStream.write(`[${new Date().toISOString()}] ERROR: ${err.message}\n${err.stack}\n`);
+        res.status(500).send('An error occurred');
+    }
+});
+
+
+// --- Error Handling Middleware (Always last) ---
+app.use((err, req, res, next) => {
+    console.error(err.stack); // Log to console for immediate visibility
+    errorLogStream.write(`[${new Date().toISOString()}] UNHANDLED ERROR: ${err.message}\n${err.stack}\n`);
+    res.status(500).send('Something broke!');
+});
+
+
+// --- Start Server ---
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    // These initial writes confirm stream health
+    console.log(`Access logs will be written to: ${path.join(logsDir, 'access.log')}`);
+    console.log(`Error logs will be written to: ${path.join(logsDir, 'errors.log')}`);
+});
+
+
+// --- Handle process exit to close streams properly ---
+process.on('SIGINT', () => {
+    console.log('SIGINT signal received. Closing log streams...');
+    accessLogStream.end(() => {
+        console.log('access.log stream closed.');
+    });
+    errorLogStream.end(() => {
+        console.log('errors.log stream closed.');
+        process.exit(0); // Exit after all streams are closed
+    });
+});
+
+process.on('SIGTERM', () => {
+    console.log('SIGTERM signal received. Closing log streams...');
+    accessLogStream.end(() => {
+        console.log('access.log stream closed.');
+    });
+    errorLogStream.end(() => {
+        console.log('errors.log stream closed.');
+        process.exit(0);
+    });
+});
+
+// Catch uncaught exceptions to prevent process from crashing
+process.on('uncaughtException', (err) => {
+    console.error('UNCAUGHT EXCEPTION:', err);
+    errorLogStream.write(`[${new Date().toISOString()}] UNCAUGHT EXCEPTION: ${err.message}\n${err.stack}\n`);
+    // It's often recommended to exit after uncaught exceptions for process stability
+    // process.exit(1);
+});
+
+// Catch unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('UNHANDLED REJECTION:', reason);
+    errorLogStream.write(`[${new Date().toISOString()}] UNHANDLED REJECTION: ${reason}\n`);
+    // process.exit(1);
+});
+
+
+// // 5. Use explicit morgan format
+// app.use(morgan('combined', {
+//   stream: accessLogStream,
+//   // Ensure it logs immediately rather than buffering
+//   immediate: true
+// }));
+
+// // 6. Add middleware to verify logging
+// app.use((req, res, next) => {
+//   console.log('Request received - should be logged'); // Verify in console
+//   next();
+// });
+
+// // 7. Handle process exit to close streams properly
+// process.on('SIGINT', () => {
+//   accessLogStream.end();
+//   errorLogStream.end();
+//   process.exit();
+// });
+
+
+// app.listen(port, ()=>{
+//     console.log(`Server is running on port ${port}.`);
+// })
+
+// 
